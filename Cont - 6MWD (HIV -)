@@ -1,24 +1,103 @@
-# Initialize empty table to hold N
-n_table <- data.frame(matrix(NA, nrow = length(model_adjustments), ncol = length(independent_vars)))
-rownames(n_table) <- names(model_adjustments)
-colnames(n_table) <- independent_vars
+# Load libraries
+library(readxl)
+library(dplyr)
+library(broom)
+library(tidyr)
+library(lmtest)
+library(sandwich)
 
-# Loop through models and echo variables
+# --- Load & prepare data (HIV-negative only) ---
+file_path <- "C:/Users/USER/Desktop/Projects/ECHO-6MW/Second set/Dataset_TTEand6MWD.xlsx"
+data_all <- read_excel(file_path)
+
+data <- data_all %>%
+  filter(a1_hiv_st == 0) %>%   # HIV-negative
+  mutate(
+    sex = as.factor(sex),
+    race_id_der = as.factor(race_id_der),
+    bmi_cat_tri_der = as.factor(bmi_cat_tri_der),
+    ever_smok_stat_der = as.factor(ever_smok_stat_der),
+    ever_ivdu_stat_der = as.factor(ever_ivdu_stat_der),
+    anemia_der = as.factor(anemia_der),
+    post_old_gli_der = as.factor(post_old_gli_der),
+    dlco_stat_binary_gli_pft_1_der = as.factor(dlco_stat_binary_gli_pft_1_der)
+  ) %>%
+  droplevels()
+
+# --- Echo independent variables (note: 'trv' is lowercase) ---
+independent_vars <- c(
+  "lv_dia_diam", "lv_sys_diam", "lv_septal_thickness", "lv_post_wall_thickness",
+  "aortic_root_size", "la_diam", "lv_ef", "trv", "rap", "pasp"
+)
+
+# --- Model adjustment sets (hepatitis C removed) ---
+model_adjustments <- list(
+  "Model 0" = c(),  # unadjusted
+  "Model 1" = c("age_tte_der", "sex", "race_id_der"),
+  "Model 2" = c("age_tte_der", "sex", "race_id_der",
+                "bmi_cat_tri_der", "ever_smok_stat_der", "ever_ivdu_stat_der",
+                "anemia_der"),
+  "Model 3" = c("age_tte_der", "sex", "race_id_der",
+                "bmi_cat_tri_der", "ever_smok_stat_der", "ever_ivdu_stat_der",
+                "anemia_der", "post_old_gli_der", "dlco_stat_binary_gli_pft_1_der")
+)
+
+# --- Run models and collect "beta, p-value" for each echo variable (HC3 robust) ---
+results_all_models <- data.frame(matrix(NA, nrow = length(model_adjustments), ncol = length(independent_vars)))
+rownames(results_all_models) <- names(model_adjustments)
+colnames(results_all_models) <- independent_vars
+
 for (model_name in names(model_adjustments)) {
   adjusters <- model_adjustments[[model_name]]
   
   for (var in independent_vars) {
+    # Build a sub-dataset for this run and drop NAs to avoid contrast issues
     vars_needed <- c("dist_meters_1", var, adjusters)
-    
-    # Drop NAs for required variables
-    n_obs <- data %>%
+    subdat <- data %>%
       dplyr::select(all_of(vars_needed)) %>%
       tidyr::drop_na() %>%
-      nrow()
+      droplevels()
     
-    n_table[model_name, var] <- n_obs
+    # If nothing left after NA drop, record NA and continue
+    if (nrow(subdat) < 2) {
+      results_all_models[model_name, var] <- "NA"
+      next
+    }
+    
+    # Safeguard: drop any factor adjusters that collapsed to a single level after NA drop
+    if (length(adjusters) > 0) {
+      is_valid <- sapply(adjusters, function(x) {
+        obj <- subdat[[x]]
+        if (is.factor(obj)) nlevels(obj) >= 2 else TRUE
+      })
+      adj_use <- adjusters[is_valid]
+    } else {
+      adj_use <- adjusters
+    }
+    
+    # Build formula
+    formula_str <- if (length(adj_use) == 0) {
+      paste("dist_meters_1 ~", var)
+    } else {
+      paste("dist_meters_1 ~", var, "+", paste(adj_use, collapse = " + "))
+    }
+    
+    # Fit model
+    fit <- lm(as.formula(formula_str), data = subdat)
+    
+    # HC3 robust coefficients
+    robust_tbl <- lmtest::coeftest(fit, vcov = sandwich::vcovHC(fit, type = "HC3")) %>% 
+      broom::tidy()
+    
+    main_row <- robust_tbl %>% filter(term == var)
+    
+    results_all_models[model_name, var] <- if (nrow(main_row) == 1) {
+      sprintf("%.3f, %.3f", main_row$estimate, main_row$p.value)  # beta, p-value (robust)
+    } else {
+      "NA"
+    }
   }
 }
 
-# View the table of N used in each model
-View(n_table)
+# View the final table
+View(results_all_models)
