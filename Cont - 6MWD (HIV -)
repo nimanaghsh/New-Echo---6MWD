@@ -1,0 +1,24 @@
+# Initialize empty table to hold N
+n_table <- data.frame(matrix(NA, nrow = length(model_adjustments), ncol = length(independent_vars)))
+rownames(n_table) <- names(model_adjustments)
+colnames(n_table) <- independent_vars
+
+# Loop through models and echo variables
+for (model_name in names(model_adjustments)) {
+  adjusters <- model_adjustments[[model_name]]
+  
+  for (var in independent_vars) {
+    vars_needed <- c("dist_meters_1", var, adjusters)
+    
+    # Drop NAs for required variables
+    n_obs <- data %>%
+      dplyr::select(all_of(vars_needed)) %>%
+      tidyr::drop_na() %>%
+      nrow()
+    
+    n_table[model_name, var] <- n_obs
+  }
+}
+
+# View the table of N used in each model
+View(n_table)
