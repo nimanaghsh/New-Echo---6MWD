@@ -3,6 +3,8 @@ library(readxl)
 library(dplyr)
 library(broom)
 library(tidyr)
+library(lmtest)
+library(sandwich)
 
 # Load dataset
 file_path <- "C:/Users/USER/Desktop/Projects/ECHO-6MW/Second set/Dataset_TTEand6MWD.xlsx"
@@ -52,7 +54,7 @@ results_hivpos <- data.frame(matrix(NA, nrow = length(model_adjustments), ncol =
 rownames(results_hivpos) <- names(model_adjustments)
 colnames(results_hivpos) <- independent_vars
 
-# Run models
+# Run models (HC3 robust SEs) and fill "beta, p-value"
 for (model_name in names(model_adjustments)) {
   adjusters <- model_adjustments[[model_name]]
   
@@ -83,7 +85,11 @@ for (model_name in names(model_adjustments)) {
     }
     
     model <- lm(as.formula(formula_str), data = subdat)
-    main_row <- tidy(model) %>% filter(term == var)
+    
+    # HC3 robust results
+    robust_tbl <- lmtest::coeftest(model, vcov = sandwich::vcovHC(model, type = "HC3")) %>%
+      broom::tidy()
+    main_row <- robust_tbl %>% dplyr::filter(term == var)
     
     results_hivpos[model_name, var] <- if (nrow(main_row) == 1) {
       sprintf("%.3f, %.3f", main_row$estimate, main_row$p.value)
