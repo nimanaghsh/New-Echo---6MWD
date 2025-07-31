@@ -2,6 +2,8 @@
 library(readxl)
 library(dplyr)
 library(broom)
+library(lmtest)
+library(sandwich)
 
 # Load the dataset
 file_path <- "C:/Users/USER/Desktop/Projects/ECHO-6MW/Second set/Dataset_TTEand6MWD.xlsx"
@@ -22,15 +24,15 @@ data <- data %>%
     dlco_stat_binary_gli_pft_1_der = as.factor(dlco_stat_binary_gli_pft_1_der)
   )
 
-# Define main independent echo variables
+# Define independent variables
 independent_vars <- c(
   "lv_dia_diam", "lv_sys_diam", "lv_septal_thickness", "lv_post_wall_thickness",
   "aortic_root_size", "la_diam", "lv_ef", "trv", "rap", "pasp"
 )
 
-# Define model adjustment sets
+# Define adjustment models
 model_adjustments <- list(
-  "Model 0" = c(),  # unadjusted
+  "Model 0" = c(),
   "Model 1" = c("age_tte_der", "sex", "race_id_der"),
   "Model 2" = c("age_tte_der", "sex", "race_id_der", "bmi_cat_tri_der", "ever_smok_stat_der",
                 "ever_ivdu_stat_der", "g9_hepatitis_c", "anemia_der", "a1_hiv_st"),
@@ -39,7 +41,7 @@ model_adjustments <- list(
                 "post_old_gli_der", "dlco_stat_binary_gli_pft_1_der")
 )
 
-# Initialize output table
+# Initialize results table
 results_all_models <- data.frame(matrix(NA, nrow = length(model_adjustments), ncol = length(independent_vars)))
 rownames(results_all_models) <- names(model_adjustments)
 colnames(results_all_models) <- independent_vars
@@ -50,13 +52,16 @@ for (model_name in names(model_adjustments)) {
   
   for (var in independent_vars) {
     formula_str <- if (length(adjusters) == 0) {
-      paste("dist_meters_1 ~", var)  # unadjusted
+      paste("dist_meters_1 ~", var)
     } else {
       paste("dist_meters_1 ~", var, "+", paste(adjusters, collapse = " + "))
     }
     
-    model <- lm(as.formula(formula_str), data = data)
-    main_row <- tidy(model) %>% filter(term == var)
+    fit <- lm(as.formula(formula_str), data = data, na.action = na.exclude)
+    
+    # Get robust results (HC3)
+    robust <- coeftest(fit, vcov = vcovHC(fit, type = "HC3")) %>% broom::tidy()
+    main_row <- robust %>% filter(term == var)
     
     results_all_models[model_name, var] <- if (nrow(main_row) == 1) {
       sprintf("%.3f, %.3f", main_row$estimate, main_row$p.value)
@@ -66,5 +71,5 @@ for (model_name in names(model_adjustments)) {
   }
 }
 
-# View final table
+# View results
 View(results_all_models)
