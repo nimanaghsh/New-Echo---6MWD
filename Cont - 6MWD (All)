@@ -1,0 +1,70 @@
+# Load libraries
+library(readxl)
+library(dplyr)
+library(broom)
+
+# Load the dataset
+file_path <- "C:/Users/USER/Desktop/Projects/ECHO-6MW/Second set/Dataset_TTEand6MWD.xlsx"
+data <- read_excel(file_path)
+
+# Convert categorical covariates to factors
+data <- data %>%
+  mutate(
+    sex = as.factor(sex),
+    race_id_der = as.factor(race_id_der),
+    bmi_cat_tri_der = as.factor(bmi_cat_tri_der),
+    ever_smok_stat_der = as.factor(ever_smok_stat_der),
+    ever_ivdu_stat_der = as.factor(ever_ivdu_stat_der),
+    g9_hepatitis_c = as.factor(g9_hepatitis_c),
+    anemia_der = as.factor(anemia_der),
+    a1_hiv_st = as.factor(a1_hiv_st),
+    post_old_gli_der = as.factor(post_old_gli_der),
+    dlco_stat_binary_gli_pft_1_der = as.factor(dlco_stat_binary_gli_pft_1_der)
+  )
+
+# Define main independent echo variables
+independent_vars <- c(
+  "lv_dia_diam", "lv_sys_diam", "lv_septal_thickness", "lv_post_wall_thickness",
+  "aortic_root_size", "la_diam", "lv_ef", "trv", "rap", "pasp"
+)
+
+# Define model adjustment sets
+model_adjustments <- list(
+  "Model 0" = c(),  # unadjusted
+  "Model 1" = c("age_tte_der", "sex", "race_id_der"),
+  "Model 2" = c("age_tte_der", "sex", "race_id_der", "bmi_cat_tri_der", "ever_smok_stat_der",
+                "ever_ivdu_stat_der", "g9_hepatitis_c", "anemia_der", "a1_hiv_st"),
+  "Model 3" = c("age_tte_der", "sex", "race_id_der", "bmi_cat_tri_der", "ever_smok_stat_der",
+                "ever_ivdu_stat_der", "g9_hepatitis_c", "anemia_der", "a1_hiv_st",
+                "post_old_gli_der", "dlco_stat_binary_gli_pft_1_der")
+)
+
+# Initialize output table
+results_all_models <- data.frame(matrix(NA, nrow = length(model_adjustments), ncol = length(independent_vars)))
+rownames(results_all_models) <- names(model_adjustments)
+colnames(results_all_models) <- independent_vars
+
+# Loop through models and variables
+for (model_name in names(model_adjustments)) {
+  adjusters <- model_adjustments[[model_name]]
+  
+  for (var in independent_vars) {
+    formula_str <- if (length(adjusters) == 0) {
+      paste("dist_meters_1 ~", var)  # unadjusted
+    } else {
+      paste("dist_meters_1 ~", var, "+", paste(adjusters, collapse = " + "))
+    }
+    
+    model <- lm(as.formula(formula_str), data = data)
+    main_row <- tidy(model) %>% filter(term == var)
+    
+    results_all_models[model_name, var] <- if (nrow(main_row) == 1) {
+      sprintf("%.3f, %.3f", main_row$estimate, main_row$p.value)
+    } else {
+      "NA"
+    }
+  }
+}
+
+# View final table
+View(results_all_models)
