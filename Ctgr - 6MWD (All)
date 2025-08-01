@@ -1,0 +1,97 @@
+# Robust (HC3) models for binary predictors in Models 0–3
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(broom)
+library(lmtest)
+library(sandwich)
+
+# --- Load & prepare data ---
+file_path <- "C:/Users/USER/Desktop/Projects/ECHO-6MW/Second set/Dataset_TTEand6MWD.xlsx"
+data <- read_excel(file_path) %>%
+  mutate(
+    # categorical covariates as factors
+    sex = as.factor(sex),
+    race_id_der = as.factor(race_id_der),
+    bmi_cat_tri_der = as.factor(bmi_cat_tri_der),
+    ever_smok_stat_der = as.factor(ever_smok_stat_der),
+    ever_ivdu_stat_der = as.factor(ever_ivdu_stat_der),
+    g9_hepatitis_c = as.factor(g9_hepatitis_c),
+    anemia_der = as.factor(anemia_der),
+    a1_hiv_st = as.factor(a1_hiv_st),
+    post_old_gli_der = as.factor(post_old_gli_der),
+    dlco_stat_binary_gli_pft_1_der = as.factor(dlco_stat_binary_gli_pft_1_der)
+  ) %>%
+  droplevels()
+
+# --- Binary independent variables ---
+independent_vars <- c("lv_syst_dysfxn_der", "ph_prob_der", "dd", "valve_abn_der")
+
+# --- Model adjustment sets (0–3, as in your original) ---
+model_adjustments <- list(
+  "Model 0" = c(),  # unadjusted
+  "Model 1" = c("age_tte_der", "sex", "race_id_der"),
+  "Model 2" = c("age_tte_der", "sex", "race_id_der", "bmi_cat_tri_der",
+                "ever_smok_stat_der", "ever_ivdu_stat_der", "g9_hepatitis_c",
+                "anemia_der", "a1_hiv_st"),
+  "Model 3" = c("age_tte_der", "sex", "race_id_der", "bmi_cat_tri_der",
+                "ever_smok_stat_der", "ever_ivdu_stat_der", "g9_hepatitis_c",
+                "anemia_der", "a1_hiv_st", "post_old_gli_der",
+                "dlco_stat_binary_gli_pft_1_der")
+)
+
+# --- Results table ("Beta, p") ---
+results_bin <- data.frame(matrix(NA, nrow = length(model_adjustments), ncol = length(independent_vars)))
+rownames(results_bin) <- names(model_adjustments)
+colnames(results_bin) <- independent_vars
+
+for (model_name in names(model_adjustments)) {
+  adjusters <- model_adjustments[[model_name]]
+  
+  for (var in independent_vars) {
+    # Subset required vars and drop NAs
+    vars_needed <- c("dist_meters_1", var, adjusters)
+    subdat <- data %>%
+      dplyr::select(all_of(vars_needed)) %>%
+      tidyr::drop_na() %>%
+      droplevels()
+    
+    # Need both levels of the binary predictor
+    if (!var %in% names(subdat) || length(unique(subdat[[var]])) < 2 || nrow(subdat) < 2) {
+      results_bin[model_name, var] <- "NA"
+      next
+    }
+    
+    # Drop any factor adjusters that collapsed to 1 level after NA drop
+    if (length(adjusters)) {
+      valid_adj <- adjusters[sapply(adjusters, function(x) {
+        obj <- subdat[[x]]
+        if (is.factor(obj)) nlevels(obj) >= 2 else TRUE
+      })]
+    } else {
+      valid_adj <- adjusters
+    }
+    
+    # Build formula
+    formula_str <- if (length(valid_adj) == 0) {
+      paste("dist_meters_1 ~", var)
+    } else {
+      paste("dist_meters_1 ~", var, "+", paste(valid_adj, collapse = " + "))
+    }
+    
+    fit <- lm(as.formula(formula_str), data = subdat)
+    
+    # HC3 robust SEs
+    rob <- lmtest::coeftest(fit, vcov = sandwich::vcovHC(fit, type = "HC3")) %>% broom::tidy()
+    main_row <- rob %>% dplyr::filter(term == var)
+    
+    results_bin[model_name, var] <- if (nrow(main_row) == 1) {
+      sprintf("%.3f, %.3f", main_row$estimate, main_row$p.value)  # Beta (Δ meters for 1 vs 0), p
+    } else {
+      "NA"
+    }
+  }
+}
+
+# View results
+View(results_bin)
