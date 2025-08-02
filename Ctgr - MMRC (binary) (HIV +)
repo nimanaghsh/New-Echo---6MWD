@@ -1,0 +1,107 @@
+# Binary outcome (mmrc2_1_der: 0/1) — HIV-positive group, Models 0–4
+# Predictors: lv_syst_dysfxn_der, ph_prob_der, dd, valve_abn_der
+# Cells show "OR, p" (NON-robust SEs)
+
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(broom)
+
+# --- Load & prepare (HIV+ only) ---
+file_path <- "C:/Users/USER/Desktop/Projects/ECHO-6MW/Second set/Dataset_TTEand6MWD.xlsx"
+data_all <- read_excel(file_path)
+
+data <- data_all %>%
+  filter(a1_hiv_st == 1) %>%
+  mutate(
+    sex = as.factor(sex),
+    race_id_der = as.factor(race_id_der),
+    bmi_cat_tri_der = as.factor(bmi_cat_tri_der),
+    ever_smok_stat_der = as.factor(ever_smok_stat_der),
+    ever_ivdu_stat_der = as.factor(ever_ivdu_stat_der),
+    g9_hepatitis_c = as.factor(g9_hepatitis_c),
+    anemia_der = as.factor(anemia_der),
+    post_old_gli_der = as.factor(post_old_gli_der),
+    dlco_stat_binary_gli_pft_1_der = as.factor(dlco_stat_binary_gli_pft_1_der),
+    vl_detectable_der = as.factor(vl_detectable_der),
+    mmrc2_1_der = as.integer(mmrc2_1_der)  # ensure 0/1
+  ) %>% droplevels()
+
+# --- Binary independent variables ---
+independent_vars <- c("lv_syst_dysfxn_der", "ph_prob_der", "dd", "valve_abn_der")
+
+# --- Model adjustment sets (HIV+) ---
+model_adjustments <- list(
+  "Model 0" = c(),
+  "Model 1" = c("age_tte_der", "sex", "race_id_der"),
+  "Model 2" = c("age_tte_der", "sex", "race_id_der",
+                "bmi_cat_tri_der", "ever_smok_stat_der", "ever_ivdu_stat_der",
+                "g9_hepatitis_c", "anemia_der"),
+  "Model 3" = c("age_tte_der", "sex", "race_id_der",
+                "bmi_cat_tri_der", "ever_smok_stat_der", "ever_ivdu_stat_der",
+                "g9_hepatitis_c", "anemia_der",
+                "time_living_with_hiv_der", "cd4", "vl_detectable_der"),
+  "Model 4" = c("age_tte_der", "sex", "race_id_der",
+                "bmi_cat_tri_der", "ever_smok_stat_der", "ever_ivdu_stat_der",
+                "g9_hepatitis_c", "anemia_der",
+                "time_living_with_hiv_der", "cd4", "vl_detectable_der",
+                "post_old_gli_der", "dlco_stat_binary_gli_pft_1_der")
+)
+
+# --- Results table ("OR, p") ---
+results_mmrc2_hiv1 <- data.frame(matrix(NA, nrow = length(model_adjustments), ncol = length(independent_vars)))
+rownames(results_mmrc2_hiv1) <- names(model_adjustments)
+colnames(results_mmrc2_hiv1) <- independent_vars
+
+for (model_name in names(model_adjustments)) {
+  adjusters <- model_adjustments[[model_name]]
+  for (var in independent_vars) {
+    
+    # Subset required variables and drop NAs
+    vars_needed <- c("mmrc2_1_der", var, adjusters)
+    subdat <- data %>%
+      dplyr::select(all_of(vars_needed)) %>%
+      tidyr::drop_na() %>%
+      droplevels()
+    
+    # Need outcome with both levels and predictor variation
+    if (!("mmrc2_1_der" %in% names(subdat)) ||
+        length(unique(subdat$mmrc2_1_der)) < 2 ||
+        length(unique(subdat[[var]])) < 2 ||
+        nrow(subdat) < 5) {
+      results_mmrc2_hiv1[model_name, var] <- "NA"
+      next
+    }
+    
+    # Drop adjusters that collapsed to one level after NA drop
+    valid_adj <- if (length(adjusters)) {
+      adjusters[sapply(adjusters, function(x) {
+        obj <- subdat[[x]]
+        if (is.factor(obj)) nlevels(obj) >= 2 else TRUE
+      })]
+    } else character(0)
+    
+    # Build formula
+    formula_str <- if (length(valid_adj) == 0) {
+      paste("mmrc2_1_der ~", var)
+    } else {
+      paste("mmrc2_1_der ~", var, " + ", paste(valid_adj, collapse = " + "))
+    }
+    
+    # Logistic regression (non-robust SEs)
+    fit <- glm(as.formula(formula_str), data = subdat, family = binomial())
+    tt  <- broom::tidy(fit)
+    
+    # Extract predictor row, convert to OR
+    row <- dplyr::filter(tt, term == var)
+    if (nrow(row) == 1) {
+      OR <- exp(row$estimate)
+      results_mmrc2_hiv1[model_name, var] <- sprintf("%.3f, %.3f", OR, row$p.value)
+    } else {
+      results_mmrc2_hiv1[model_name, var] <- "NA"
+    }
+  }
+}
+
+# View results
+View(results_mmrc2_hiv1)
