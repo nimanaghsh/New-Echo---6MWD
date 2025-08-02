@@ -1,0 +1,205 @@
+# --- Libraries ---
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(broom)
+
+# --- Common setup ---
+file_path <- "C:/Users/USER/Desktop/Projects/ECHO-6MW/Second set/Dataset_TTEand6MWD.xlsx"
+data0 <- read_excel(file_path)
+
+# Continuous predictors
+independent_vars <- c(
+  "lv_dia_diam", "lv_sys_diam", "lv_septal_thickness", "lv_post_wall_thickness",
+  "aortic_root_size", "la_diam", "lv_ef", "trv", "rap", "pasp"
+)
+
+# Helper: run OLS for continuous predictors and return a "beta, p" table (non-robust SEs)
+run_models_lm_cont <- function(df, outcome, preds, model_adjustments) {
+  out <- data.frame(matrix(NA, nrow = length(model_adjustments), ncol = length(preds)))
+  rownames(out) <- names(model_adjustments)
+  colnames(out) <- preds
+  
+  for (model_name in names(model_adjustments)) {
+    adjusters <- model_adjustments[[model_name]]
+    
+    for (var in preds) {
+      vars_needed <- c(outcome, var, adjusters)
+      
+      subdat <- df |>
+        dplyr::select(dplyr::all_of(vars_needed)) |>
+        tidyr::drop_na()
+      
+      # Basic checks
+      ok_outcome <- outcome %in% names(subdat) &&
+        is.numeric(subdat[[outcome]]) &&
+        is.finite(sd(subdat[[outcome]])) &&
+        sd(subdat[[outcome]]) > 0
+      ok_predict <- var %in% names(subdat) &&
+        is.numeric(subdat[[var]]) &&
+        length(unique(subdat[[var]])) >= 2 &&
+        is.finite(sd(subdat[[var]])) &&
+        sd(subdat[[var]]) > 0
+      
+      if (!ok_outcome || !ok_predict || nrow(subdat) < 5) {
+        out[model_name, var] <- "NA"
+        next
+      }
+      
+      # Build formula
+      formula_str <- if (length(adjusters) == 0) {
+        paste(outcome, "~", var)
+      } else {
+        paste(outcome, "~", var, "+", paste(adjusters, collapse = " + "))
+      }
+      
+      fit <- tryCatch(
+        lm(stats::as.formula(formula_str), data = subdat, na.action = na.exclude),
+        error = function(e) NULL
+      )
+      if (is.null(fit)) { out[model_name, var] <- "NA"; next }
+      
+      tt <- tryCatch(broom::tidy(fit), error = function(e) NULL)
+      if (is.null(tt)) { out[model_name, var] <- "NA"; next }
+      
+      main_row <- tt %>% dplyr::filter(term == var)
+      if (nrow(main_row) == 1 && is.finite(main_row$estimate) && is.finite(main_row$p.value)) {
+        out[model_name, var] <- sprintf("%.3f, %.3f", main_row$estimate, main_row$p.value)
+      } else {
+        out[model_name, var] <- "NA"
+      }
+    }
+  }
+  out
+}
+
+# =========================
+# 1) ALL participants (Models 0–3)
+# =========================
+data_all <- data0 |>
+  mutate(
+    # Outcome numeric (coerce in case Excel imported as text)
+    sgrq_total_score_1 = suppressWarnings(as.numeric(sgrq_total_score_1)),
+    # Predictors numeric
+    across(all_of(independent_vars), ~ suppressWarnings(as.numeric(.))),
+    # Covariates as factors
+    sex = as.factor(sex),
+    race_id_der = as.factor(race_id_der),
+    bmi_cat_tri_der = as.factor(bmi_cat_tri_der),
+    ever_smok_stat_der = as.factor(ever_smok_stat_der),
+    ever_ivdu_stat_der = as.factor(ever_ivdu_stat_der),
+    g9_hepatitis_c = as.factor(g9_hepatitis_c),
+    anemia_der = as.factor(anemia_der),
+    a1_hiv_st = as.factor(a1_hiv_st),
+    post_old_gli_der = as.factor(post_old_gli_der),
+    dlco_stat_binary_gli_pft_1_der = as.factor(dlco_stat_binary_gli_pft_1_der)
+  ) |>
+  droplevels()
+
+model_adjustments_all <- list(
+  "Model 0" = c(),
+  "Model 1" = c("age_tte_der", "sex", "race_id_der"),
+  "Model 2" = c("age_tte_der", "sex", "race_id_der",
+                "bmi_cat_tri_der", "ever_smok_stat_der", "ever_ivdu_stat_der",
+                "g9_hepatitis_c", "anemia_der", "a1_hiv_st"),
+  "Model 3" = c("age_tte_der", "sex", "race_id_der",
+                "bmi_cat_tri_der", "ever_smok_stat_der", "ever_ivdu_stat_der",
+                "g9_hepatitis_c", "anemia_der", "a1_hiv_st",
+                "post_old_gli_der", "dlco_stat_binary_gli_pft_1_der")
+)
+
+results_sgrq_all_CONT_NR <- run_models_lm_cont(
+  df = data_all,
+  outcome = "sgrq_total_score_1",
+  preds = independent_vars,
+  model_adjustments = model_adjustments_all
+)
+
+# =========================
+# 2) HIV-negative (a1_hiv_st == 0; Models 0–3)
+# =========================
+data_hiv0 <- data0 |>
+  filter(a1_hiv_st == 0) |>
+  mutate(
+    sgrq_total_score_1 = suppressWarnings(as.numeric(sgrq_total_score_1)),
+    across(all_of(independent_vars), ~ suppressWarnings(as.numeric(.))),
+    sex = as.factor(sex),
+    race_id_der = as.factor(race_id_der),
+    bmi_cat_tri_der = as.factor(bmi_cat_tri_der),
+    ever_smok_stat_der = as.factor(ever_smok_stat_der),
+    ever_ivdu_stat_der = as.factor(ever_ivdu_stat_der),
+    anemia_der = as.factor(anemia_der),
+    post_old_gli_der = as.factor(post_old_gli_der),
+    dlco_stat_binary_gli_pft_1_der = as.factor(dlco_stat_binary_gli_pft_1_der)
+  ) |>
+  droplevels()
+
+model_adjustments_hiv0 <- list(
+  "Model 0" = c(),
+  "Model 1" = c("age_tte_der", "sex", "race_id_der"),
+  "Model 2" = c("age_tte_der", "sex", "race_id_der",
+                "bmi_cat_tri_der", "ever_smok_stat_der", "ever_ivdu_stat_der",
+                "anemia_der"),
+  "Model 3" = c("age_tte_der", "sex", "race_id_der",
+                "bmi_cat_tri_der", "ever_smok_stat_der", "ever_ivdu_stat_der",
+                "anemia_der", "post_old_gli_der", "dlco_stat_binary_gli_pft_1_der")
+)
+
+results_sgrq_hiv0_CONT_NR <- run_models_lm_cont(
+  df = data_hiv0,
+  outcome = "sgrq_total_score_1",
+  preds = independent_vars,
+  model_adjustments = model_adjustments_hiv0
+)
+
+# =========================
+# 3) HIV-positive (a1_hiv_st == 1; Models 0–4)
+# =========================
+data_hiv1 <- data0 |>
+  filter(a1_hiv_st == 1) |>
+  mutate(
+    sgrq_total_score_1 = suppressWarnings(as.numeric(sgrq_total_score_1)),
+    across(all_of(independent_vars), ~ suppressWarnings(as.numeric(.))),
+    sex = as.factor(sex),
+    race_id_der = as.factor(race_id_der),
+    bmi_cat_tri_der = as.factor(bmi_cat_tri_der),
+    ever_smok_stat_der = as.factor(ever_smok_stat_der),
+    ever_ivdu_stat_der = as.factor(ever_ivdu_stat_der),
+    g9_hepatitis_c = as.factor(g9_hepatitis_c),
+    anemia_der = as.factor(anemia_der),
+    post_old_gli_der = as.factor(post_old_gli_der),
+    dlco_stat_binary_gli_pft_1_der = as.factor(dlco_stat_binary_gli_pft_1_der),
+    vl_detectable_der = as.factor(vl_detectable_der),
+    time_living_with_hiv_der = suppressWarnings(as.numeric(time_living_with_hiv_der)),
+    cd4 = suppressWarnings(as.numeric(cd4))
+  ) |>
+  droplevels()
+
+model_adjustments_hiv1 <- list(
+  "Model 0" = c(),
+  "Model 1" = c("age_tte_der", "sex", "race_id_der"),
+  "Model 2" = c("age_tte_der", "sex", "race_id_der",
+                "bmi_cat_tri_der", "ever_smok_stat_der", "ever_ivdu_stat_der",
+                "g9_hepatitis_c", "anemia_der"),
+  "Model 3" = c("age_tte_der", "sex", "race_id_der",
+                "bmi_cat_tri_der", "ever_smok_stat_der", "ever_ivdu_stat_der",
+                "g9_hepatitis_c", "anemia_der",
+                "time_living_with_hiv_der", "cd4", "vl_detectable_der"),
+  "Model 4" = c("age_tte_der", "sex", "race_id_der",
+                "bmi_cat_tri_der", "ever_smok_stat_der", "ever_ivdu_stat_der",
+                "g9_hepatitis_c", "anemia_der",
+                "time_living_with_hiv_der", "cd4", "vl_detectable_der",
+                "post_old_gli_der", "dlco_stat_binary_gli_pft_1_der")
+)
+
+results_sgrq_hiv1_CONT_NR <- run_models_lm_cont(
+  df = data_hiv1,
+  outcome = "sgrq_total_score_1",
+  preds = independent_vars,
+  model_adjustments = model_adjustments_hiv1
+)
+
+# --- Inspect (in RStudio) ---
+View(results_sgrq_all_CONT_NR)
+View(results_sgrq_hiv0_CONT_NR)
+View(results_sgrq_hiv1_CONT_NR)
