@@ -1,0 +1,113 @@
+# Ordinal outcome (MMRC 0–4): proportional-odds models for Models 0–3
+# Output cell: "OR, p" (for numeric/binary); for multi-level factors: "Level: OR, p; ..."
+
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(broom)
+library(MASS)
+
+# --- Load & prepare data (ALL) ---
+file_path <- "C:/Users/USER/Desktop/Projects/ECHO-6MW/Second set/Dataset_TTEand6MWD.xlsx"
+data <- read_excel(file_path) %>%
+  mutate(
+    sex = as.factor(sex),
+    race_id_der = as.factor(race_id_der),
+    bmi_cat_tri_der = as.factor(bmi_cat_tri_der),
+    ever_smok_stat_der = as.factor(ever_smok_stat_der),
+    ever_ivdu_stat_der = as.factor(ever_ivdu_stat_der),
+    g9_hepatitis_c = as.factor(g9_hepatitis_c),
+    anemia_der = as.factor(anemia_der),
+    a1_hiv_st = as.factor(a1_hiv_st),
+    post_old_gli_der = as.factor(post_old_gli_der),
+    dlco_stat_binary_gli_pft_1_der = as.factor(dlco_stat_binary_gli_pft_1_der),
+    mmrc_score_1 = ordered(mmrc_score_1, levels = 0:4)  # 0<1<2<3<4
+  ) %>% droplevels()
+
+# --- Predictors (edit as needed) ---
+independent_vars <- c(
+  "lv_dia_diam", "lv_sys_diam", "lv_septal_thickness", "lv_post_wall_thickness",
+  "aortic_root_size", "la_diam", "lv_ef", "trv", "rap", "pasp"
+)
+
+# --- Model adjustment sets (0–3) ---
+model_adjustments <- list(
+  "Model 0" = c(),
+  "Model 1" = c("age_tte_der", "sex", "race_id_der"),
+  "Model 2" = c("age_tte_der", "sex", "race_id_der", "bmi_cat_tri_der",
+                "ever_smok_stat_der", "ever_ivdu_stat_der", "g9_hepatitis_c",
+                "anemia_der", "a1_hiv_st"),
+  "Model 3" = c("age_tte_der", "sex", "race_id_der", "bmi_cat_tri_der",
+                "ever_smok_stat_der", "ever_ivdu_stat_der", "g9_hepatitis_c",
+                "anemia_der", "a1_hiv_st", "post_old_gli_der",
+                "dlco_stat_binary_gli_pft_1_der")
+)
+
+# --- Results table: one column per predictor; each cell "OR, p" (multi-level factors joined) ---
+results_mmrc <- data.frame(matrix(NA, nrow = length(model_adjustments), ncol = length(independent_vars)))
+rownames(results_mmrc) <- names(model_adjustments)
+colnames(results_mmrc) <- independent_vars
+
+for (model_name in names(model_adjustments)) {
+  adjusters <- model_adjustments[[model_name]]
+  
+  for (var in independent_vars) {
+    vars_needed <- c("mmrc_score_1", var, adjusters)
+    subdat <- data %>%
+      dplyr::select(all_of(vars_needed)) %>%
+      tidyr::drop_na() %>%
+      droplevels()
+    
+    if (!("mmrc_score_1" %in% names(subdat)) ||
+        nrow(subdat) < 3 ||
+        length(unique(subdat$mmrc_score_1)) < 2 ||
+        !var %in% names(subdat)) {
+      results_mmrc[model_name, var] <- "NA"
+      next
+    }
+    
+    # Drop adjusters that collapsed to 1 level
+    valid_adj <- if (length(adjusters)) {
+      adjusters[sapply(adjusters, function(x) {
+        obj <- subdat[[x]]
+        if (is.factor(obj)) nlevels(obj) >= 2 else TRUE
+      })]
+    } else character(0)
+    
+    # Build formula
+    formula_str <- if (length(valid_adj) == 0) {
+      paste("mmrc_score_1 ~", var)
+    } else {
+      paste("mmrc_score_1 ~", var, "+", paste(valid_adj, collapse = " + "))
+    }
+    
+    # Fit proportional-odds model
+    fit <- MASS::polr(as.formula(formula_str), data = subdat, Hess = TRUE)
+    
+    # Tidy; compute p from z, drop threshold rows (contain "|")
+    tt <- broom::tidy(fit)
+    tt$p.value <- 2 * pnorm(abs(tt$statistic), lower.tail = FALSE)
+    tt <- tt %>% dplyr::filter(!grepl("\\|", term))
+    
+    # Rows for this predictor
+    rows_var <- tt %>% dplyr::filter(grepl(paste0("^", var), term) | term == var)
+    if (nrow(rows_var) == 0) {
+      results_mmrc[model_name, var] <- "NA"
+      next
+    }
+    
+    # Build cell
+    rows_var <- rows_var %>% mutate(OR = exp(estimate))
+    if (nrow(rows_var) == 1) {
+      cell <- sprintf("%.3f, %.3f", rows_var$OR, rows_var$p.value)
+    } else {
+      lvl <- sub(paste0("^", var), "", rows_var$term)
+      parts <- sprintf("%s: %.3f, %.3f", lvl, rows_var$OR, rows_var$p.value)
+      cell <- paste(parts, collapse = "; ")
+    }
+    
+    results_mmrc[model_name, var] <- cell
+  }
+}
+
+View(results_mmrc)
